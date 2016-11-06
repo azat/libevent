@@ -699,7 +699,7 @@ if (NOT EVENT__DISABLE_OPENSSL)
 
     include_directories(${OPENSSL_INCLUDE_DIR})
 
-    list(APPEND SRC_CORE bufferevent_openssl.c)
+    list(APPEND SRC_OPENSSL bufferevent_openssl.c)
     list(APPEND HDR_PUBLIC include/event2/bufferevent_ssl.h)
     list(APPEND LIB_APPS ${OPENSSL_LIBRARIES})
 endif()
@@ -711,11 +711,10 @@ if (NOT EVENT__DISABLE_THREAD_SUPPORT)
         find_package(Threads REQUIRED)
         if (NOT CMAKE_USE_PTHREADS_INIT)
             message(FATAL_ERROR
-                            "Failed to find Pthreads, set EVENT__DISABLE_THREAD_SUPPORT to disable")
+                    "Failed to find Pthreads, set EVENT__DISABLE_THREAD_SUPPORT to disable")
         endif()
 
         set(EVENT__HAVE_PTHREADS 1)
-        list(APPEND SRC_CORE evthread_pthread.c)
         list(APPEND LIB_APPS ${CMAKE_THREAD_LIBS_INIT})
     endif()
 endif()
@@ -731,6 +730,11 @@ if (NOT EVENT__DISABLE_TESTS)
         list(APPEND LIB_APPS ${ZLIB_LIBRARIES})
     endif()
 endif()
+
+set(LIBEVENT_LIBRARIES
+    event
+    event_core
+    event_extra)
 
 set(SRC_EXTRA
     event_tagging.c
@@ -762,10 +766,6 @@ if(WIN32)
             -D_CRT_NONSTDC_NO_DEPRECATE)
 
     include_directories(./WIN32-Code)
-endif()
-
-if (UNIX)
-    list(APPEND LIB_PLATFORM m)
 endif()
 
 if (SOLARIS)
@@ -809,73 +809,58 @@ configure_file(
 # Create the libraries.
 #
 
-# TODO: Add dynamic versions of the libraries as well.
-add_library(event_core ${EVENT__LIBRARY_TYPE}
-    ${HDR_PRIVATE}
-    ${HDR_COMPAT}
-    ${HDR_PUBLIC}
-    ${SRC_CORE})
+add_library(event_core ${EVENT__LIBRARY_TYPE} ${SRC_CORE})
 
-add_library(event_extra ${EVENT__LIBRARY_TYPE}
-    ${HDR_PRIVATE}
-    ${HDR_COMPAT}
-    ${HDR_PUBLIC}
-    ${SRC_CORE}
-    ${SRC_EXTRA})
+add_library(event_extra ${EVENT__LIBRARY_TYPE} ${SRC_EXTRA})
+
+if (NOT EVENT__DISABLE_OPENSSL)
+    add_library(event_openssl ${EVENT__LIBRARY_TYPE} ${SRC_OPENSSL})
+    list(APPEND LIBEVENT_LIBRARIES event_openssl)
+endif()
+
+if (CMAKE_USE_PTHREADS_INIT)
+    set(SRC_PTHREADS evthread_pthread.c)
+    add_library(event_pthreads ${EVENT__LIBRARY_TYPE} ${SRC_PTHREADS})
+    list(APPEND LIBEVENT_LIBRARIES event_pthreads)
+endif()
 
 # library exists for historical reasons; it contains the contents of
 # both libevent_core and libevent_extra. You shouldn’t use it; it may
 # go away in a future version of Libevent.
 add_library(event ${EVENT__LIBRARY_TYPE}
-    ${HDR_PRIVATE}
-    ${HDR_COMPAT}
-    ${HDR_PUBLIC}
-    ${SRC_CORE}
-    ${SRC_EXTRA})
+            ${SRC_CORE}
+            ${SRC_EXTRA})
 
 if (EVENT__BUILD_SHARED_LIBRARIES)
-    # Prepare static library to be linked to tests that need hidden symbols
-    add_library(event_extra_static STATIC
-        ${HDR_PRIVATE}
-        ${HDR_COMPAT}
-        ${HDR_PUBLIC}
-        ${SRC_CORE}
-        ${SRC_EXTRA})
+    target_link_libraries(event_core ${CMAKE_THREAD_LIBS_INIT}
+                                     ${LIB_PLATFORM})
 
-    set(EVENT_EXTRA_FOR_TEST event_extra_static)
+    target_link_libraries(event ${CMAKE_THREAD_LIBS_INIT}
+                                ${LIB_PLATFORM})
 
-   target_link_libraries(event_core ${OPENSSL_LIBRARIES}
-                                    ${CMAKE_THREAD_LIBS_INIT}
-                                    ${LIB_PLATFORM})
-
-   target_link_libraries(event ${OPENSSL_LIBRARIES}
-                               ${CMAKE_THREAD_LIBS_INIT}
-                               ${LIB_PLATFORM})
-
-   target_link_libraries(event_extra ${OPENSSL_LIBRARIES}
-                                      ${CMAKE_THREAD_LIBS_INIT}
+    target_link_libraries(event_extra ${CMAKE_THREAD_LIBS_INIT}
                                       ${LIB_PLATFORM})
 
-  set_target_properties(event
-        PROPERTIES SOVERSION
-            ${EVENT_ABI_LIBVERSION})
+    if (NOT EVENT__DISABLE_OPENSSL)
+        target_link_libraries(event_openssl ${OPENSSL_LIBRARIES}
+                                            ${CMAKE_THREAD_LIBS_INIT}
+                                            ${LIB_PLATFORM})
+    endif()
 
-  set_target_properties(event_core
-        PROPERTIES SOVERSION
-            ${EVENT_ABI_LIBVERSION})
+    if (CMAKE_USE_PTHREADS_INIT)
+        target_link_libraries(event_pthreads ${CMAKE_THREAD_LIBS_INIT}
+                                             ${LIB_PLATFORM})
+    endif()
 
-  set_target_properties(event_extra
-        PROPERTIES SOVERSION
-            ${EVENT_ABI_LIBVERSION})
-
-else (EVENT__BUILD_SHARED_LIBRARIES)
-    set(EVENT_EXTRA_FOR_TEST event_extra)
-endif (EVENT__BUILD_SHARED_LIBRARIES)
+    foreach (LIB ${LIBEVENT_LIBRARIES})
+        set_target_properties(${LIB} PROPERTIES
+                              SOVERSION ${EVENT_ABI_LIBVERSION})
+    endforeach()
+endif()
 
 #
 # Samples.
 #
-
 if (NOT EVENT__DISABLE_SAMPLES)
     set(SAMPLES
         dns-example
@@ -886,34 +871,36 @@ if (NOT EVENT__DISABLE_SAMPLES)
         http-connect
         time-test)
 
-    if (NOT EVENT__DISABLE_OPENSSL AND OPENSSL_LIBRARIES)
+    if (NOT EVENT__DISABLE_OPENSSL)
         # Special sample with more than one file.
         add_executable(https-client
-            sample/https-client.c
-            sample/openssl_hostname_validation.c
-            sample/hostcheck.c)
+                       sample/https-client.c
+                       sample/openssl_hostname_validation.c
+                       sample/hostcheck.c)
 
         target_link_libraries(https-client
-                    event_extra
-                    ${LIB_APPS}
-                    ${LIB_PLATFORM})
+                              event
+                              event_openssl
+                              ${LIB_APPS}
+                              ${LIB_PLATFORM})
 
-        add_dependencies(https-client event_extra)
+        add_dependencies(https-client event event_openssl)
 
         # Requires OpenSSL.
         list(APPEND SAMPLES le-proxy)
     endif()
 
     foreach(SAMPLE ${SAMPLES})
-        add_executable(${SAMPLE}
-                    sample/${SAMPLE}.c)
+        add_executable(${SAMPLE} sample/${SAMPLE}.c)
 
         target_link_libraries(${SAMPLE}
-                    event_extra
-                    ${LIB_APPS}
-                    ${LIB_PLATFORM})
+                              event_core
+                              event_extra
+                              event_openssl
+                              ${LIB_APPS}
+                              ${LIB_PLATFORM})
 
-        add_dependencies(${SAMPLE} event_extra)
+        add_dependencies(${SAMPLE} event_core event_extra event_openssl)
     endforeach()
 
     if (WIN32)
@@ -923,26 +910,36 @@ if (NOT EVENT__DISABLE_SAMPLES)
     endif()
 endif()
 
+macro(add_bench_prog prog)
+    add_executable(${prog} test/${prog}.c)
+    if (WIN32)
+        list(APPEND BENCH_SRC
+             WIN32-Code/getopt.c
+             WIN32-Code/getopt_long.c)
+    endif()
+    target_link_libraries(${BENCHMARK}
+                          event_core
+                          event_extra
+                          ${LIB_APPS}
+                          ${LIB_PLATFORM})
+    add_dependencies(${BENCHMARK} event_extra)
+endmacro()
 if (NOT EVENT__DISABLE_BENCHMARK)
     foreach (BENCHMARK bench bench_cascade bench_http bench_httpclient)
-        set(BENCH_SRC test/${BENCHMARK}.c)
-
-        if (WIN32)
-            list(APPEND BENCH_SRC
-                            WIN32-Code/getopt.c
-                            WIN32-Code/getopt_long.c)
-        endif()
-
-        add_executable(${BENCHMARK} ${BENCH_SRC})
-
-        target_link_libraries(${BENCHMARK}
-                    event_extra
-                    ${LIB_PLATFORM})
-
-        add_dependencies(${BENCHMARK} event_extra)
+        add_bench_prog(${BENCHMARK})
     endforeach()
 endif()
 
+
+macro(add_test_prog prog)
+    add_executable(${prog} test/${prog}.c)
+    target_link_libraries(${prog}
+                          ${LIB_APPS}
+                          ${LIB_PLATFORM}
+                          ${LIBEVENT_LIBRARIES}
+                          ${ARGN})
+    add_dependencies(${prog} ${LIBEVENT_LIBRARIES})
+endmacro()
 if (NOT EVENT__DISABLE_TESTS)
     #
     # Generate Regress tests.
@@ -996,18 +993,14 @@ if (NOT EVENT__DISABLE_TESTS)
                 test/regress_testutils.c
                 test/regress_testutils.h
                 test/regress_util.c
-                test/tinytest.c
-                ${SRC_CORE}
-                ${SRC_EXTRA})
+                test/tinytest.c)
 
             if (WIN32)
                 list(APPEND SRC_REGRESS test/regress_iocp.c)
                 if (NOT EVENT__DISABLE_THREAD_SUPPORT)
                     list(APPEND SRC_REGRESS test/regress_thread.c)
                 endif()
-            endif()
-
-            if (CMAKE_USE_PTHREADS_INIT)
+            elseif (CMAKE_USE_PTHREADS_INIT)
                 list(APPEND SRC_REGRESS test/regress_thread.c)
             endif()
 
@@ -1015,7 +1008,7 @@ if (NOT EVENT__DISABLE_TESTS)
                 list(APPEND SRC_REGRESS test/regress_zlib.c)
             endif()
 
-            if (OPENSSL_LIBRARIES)
+            if (NOT EVENT__DISABLE_OPENSSL)
                 list(APPEND SRC_REGRESS test/regress_ssl.c)
             endif()
 
@@ -1025,13 +1018,14 @@ if (NOT EVENT__DISABLE_TESTS)
             # header trying to "dllimport" the symbols on windows (it
             # generates a ton of warnings due to different link
             # attributes for all of the symbols)
-            SET_TARGET_PROPERTIES(regress
-                            PROPERTIES COMPILE_DEFINITIONS
-              "EVENT_BUILDING_REGRESS_TEST=1")
+            set_target_properties(regress
+                                  PROPERTIES COMPILE_DEFINITIONS
+                                  "EVENT_BUILDING_REGRESS_TEST=1")
 
             target_link_libraries(regress
-                            ${LIB_APPS}
-                            ${LIB_PLATFORM})
+                                  ${LIB_APPS}
+                                  ${LIB_PLATFORM}
+                                  ${LIBEVENT_LIBRARIES})
         else()
             message(WARNING "No suitable Python interpreter found, cannot generate regress tests!")
         endif()
@@ -1040,44 +1034,41 @@ if (NOT EVENT__DISABLE_TESTS)
     #
     # Test programs.
     #
-        # all of these, including the cmakelists.txt should be moved
-        # into the dirctory 'tests' first.
-        #
-        # doing this, we can remove all the DISABLE_TESTS stuff, and simply
-        # do something like:
-        #
-        # add_custom_targets(tests)
-        # add_executable(... EXCLUDE_FROM_ALL ...c)
-        # add_dependencis(tests testa testb testc)
-        # add_test(....)
-        #
-        # then you can just run 'make tests' instead of them all
-        # auto-compile|running
-        # - ellzey
-    set(TESTPROGS   test-changelist
-                    test-eof
-                    test-fdleak
-                    test-init
-                    test-time
-                    test-weof)
+    # all of these, including the cmakelists.txt should be moved
+    # into the dirctory 'tests' first.
+    #
+    # doing this, we can remove all the DISABLE_TESTS stuff, and simply
+    # do something like:
+    #
+    # add_custom_targets(tests)
+    # add_executable(... EXCLUDE_FROM_ALL ...c)
+    # add_dependencis(tests testa testb testc)
+    # add_test(....)
+    #
+    # then you can just run 'make tests' instead of them all
+    # auto-compile|running
+    # - ellzey
+    set(TESTPROGS test-changelist
+                  test-eof
+                  test-fdleak
+                  test-init
+                  test-time
+                  test-weof)
+
+    foreach (TESTPROG ${TESTPROGS} test-dumpevents)
+        add_test_prog(${TESTPROG})
+    endforeach()
+    if (UNIX)
+        add_test_prog(test-ratelim m)
+    else()
+        add_test_prog(test-ratelim)
+    endif()
 
     set(ALL_TESTPROGS
-            ${TESTPROGS}
-            test-dumpevents
-            test-ratelim)
-
-    # Create test program executables.
-    foreach (TESTPROG ${ALL_TESTPROGS})
-        add_executable(${TESTPROG}
-                    test/${TESTPROG}.c)
-
-        target_link_libraries(${TESTPROG}
-                    ${EVENT_EXTRA_FOR_TEST}
-                    ${LIB_PLATFORM})
-
-        add_dependencies(${TESTPROG}
-                    ${EVENT_EXTRA_FOR_TEST})
-    endforeach()
+        ${TESTPROGS}
+        test-dumpevents
+        test-ratelim
+    )
 
     #
     # We run all tests with the different backends turned on one at a time.
@@ -1265,21 +1256,20 @@ if (NOT EVENT__DISABLE_TESTS)
         message(STATUS "${WINDOWS_CTEST_COMMAND}")
 
         file(COPY ${CMAKE_CURRENT_BINARY_DIR}/tmp/verify_tests.bat
-            DESTINATION
-                            ${CMAKE_CURRENT_BINARY_DIR}
-            FILE_PERMISSIONS
-                            OWNER_READ
-                            OWNER_WRITE
-                            OWNER_EXECUTE
-                            GROUP_READ
-                            GROUP_EXECUTE
-                            WORLD_READ WORLD_EXECUTE)
+             DESTINATION ${CMAKE_CURRENT_BINARY_DIR}
+             FILE_PERMISSIONS
+                             OWNER_READ
+                             OWNER_WRITE
+                             OWNER_EXECUTE
+                             GROUP_READ
+                             GROUP_EXECUTE
+                             WORLD_READ WORLD_EXECUTE)
 
         file(TO_NATIVE_PATH
                     "${CMAKE_CURRENT_BINARY_DIR}/verify_tests.bat" VERIFY_PATH)
 
         add_custom_target(verify COMMAND "${VERIFY_PATH}"
-                        DEPENDS event ${ALL_TESTPROGS})
+                          DEPENDS event ${ALL_TESTPROGS})
     else()
         # On some platforms doing exec(unset) as CMake does won't work, so make sure
         # we run the unset command in a shell instead.
@@ -1293,23 +1283,20 @@ if (NOT EVENT__DISABLE_TESTS)
 
         # Then we copy the file (this allows us to set execute permission on it)
         file(COPY ${CMAKE_CURRENT_BINARY_DIR}/tmp/verify_tests.sh
-            DESTINATION ${CMAKE_CURRENT_BINARY_DIR}
-            FILE_PERMISSIONS
-                            OWNER_READ
-                            OWNER_WRITE
-                            OWNER_EXECUTE
-                            GROUP_READ
-                            GROUP_EXECUTE
-                            WORLD_READ
-                            WORLD_EXECUTE)
+             DESTINATION ${CMAKE_CURRENT_BINARY_DIR}
+             FILE_PERMISSIONS
+                             OWNER_READ
+                             OWNER_WRITE
+                             OWNER_EXECUTE
+                             GROUP_READ
+                             GROUP_EXECUTE
+                             WORLD_READ
+                             WORLD_EXECUTE)
 
         # Create the target that runs the script.
         add_custom_target(verify
-                    COMMAND
-                        ${CMAKE_CURRENT_BINARY_DIR}/verify_tests.sh
-          DEPENDS
-                        event
-                        ${ALL_TESTPROGS})
+                          COMMAND ${CMAKE_CURRENT_BINARY_DIR}/verify_tests.sh
+                          DEPENDS event ${ALL_TESTPROGS})
     endif()
 
     if (NOT EVENT__DISABLE_REGRESS AND __FOUND_USABLE_PYTHON)
@@ -1357,8 +1344,8 @@ foreach(p LIB BIN INCLUDE CMAKE)
 endforeach()
 
 # Export targets (This is used for other CMake projects to easily find the libraries and include files).
-export(TARGETS event event_extra event_core
-        FILE "${PROJECT_BINARY_DIR}/LibeventTargets.cmake")
+export(TARGETS ${LIBEVENT_LIBRARIES}
+       FILE "${PROJECT_BINARY_DIR}/LibeventTargets.cmake")
 export(PACKAGE libevent)
 
 # Generate the config file for the build-tree.
@@ -1397,13 +1384,13 @@ configure_file(${PROJECT_SOURCE_DIR}/cmake/LibeventConfigVersion.cmake.in
                 @ONLY)
 
 # Define the public headers.
-set_target_properties(event event_core event_extra
-    PROPERTIES PUBLIC_HEADER "${HDR_PUBLIC}")
+set_target_properties(${LIBEVENT_LIBRARIES} PROPERTIES
+                      PUBLIC_HEADER "${HDR_PUBLIC}")
 
 #
 # Install targets.
 #
-install(TARGETS event event_core event_extra
+install(TARGETS ${LIBEVENT_LIBRARIES}
         EXPORT LibeventTargets
         RUNTIME DESTINATION "${EVENT_INSTALL_BIN_DIR}" COMPONENT bin
         LIBRARY DESTINATION "${EVENT_INSTALL_LIB_DIR}" COMPONENT lib
@@ -1412,29 +1399,20 @@ install(TARGETS event event_core event_extra
 
 # Install compat headers
 install(FILES ${HDR_COMPAT}
-    DESTINATION
-            "${EVENT_INSTALL_INCLUDE_DIR}"
-    COMPONENT dev)
+        DESTINATION "${EVENT_INSTALL_INCLUDE_DIR}"
+        COMPONENT dev)
 
 # Install the configs.
 install(FILES
-    ${PROJECT_BINARY_DIR}/${CMAKE_FILES_DIRECTORY}/LibeventConfig.cmake
-    ${PROJECT_BINARY_DIR}/LibeventConfigVersion.cmake
-    DESTINATION
-            "${EVENT_INSTALL_CMAKE_DIR}"
+        ${PROJECT_BINARY_DIR}/${CMAKE_FILES_DIRECTORY}/LibeventConfig.cmake
+        ${PROJECT_BINARY_DIR}/LibeventConfigVersion.cmake
+        DESTINATION "${EVENT_INSTALL_CMAKE_DIR}"
         COMPONENT dev)
 
 # Install exports for the install-tree.
 install(EXPORT LibeventTargets
-        DESTINATION
-                    "${EVENT_INSTALL_CMAKE_DIR}"
-                COMPONENT dev)
-
-set(LIBEVENT_LIBRARIES
-        event
-        event_core
-        event_extra
-        CACHE STRING "Libevent libraries")
+        DESTINATION "${EVENT_INSTALL_CMAKE_DIR}"
+        COMPONENT dev)
 
 message(STATUS "")
 message(STATUS "        ---( Libevent " ${EVENT_VERSION} " )---")
