@@ -49,7 +49,9 @@ struct event_base;
 #if ! defined(EVENT__DISABLE_THREAD_SUPPORT) && defined(EVTHREAD_EXPOSE_STRUCTS)
 /* Global function pointers to lock-related functions. NULL if locking isn't
    enabled. */
+EVENT2_EXPORT_SYMBOL
 extern struct evthread_lock_callbacks evthread_lock_fns_;
+EVENT2_EXPORT_SYMBOL
 extern struct evthread_condition_callbacks evthread_cond_fns_;
 extern unsigned long (*evthread_id_fn_)(void);
 extern int evthread_lock_debugging_enabled_;
@@ -377,6 +379,7 @@ int evutil_global_setup_locks_(const int enable_locks);
 int evutil_secure_rng_global_setup_locks_(const int enable_locks);
 
 /** Return current evthread_lock_callbacks */
+EVENT2_EXPORT_SYMBOL
 struct evthread_lock_callbacks *evthread_get_lock_callbacks(void);
 /** Return current evthread_condition_callbacks */
 struct evthread_condition_callbacks *evthread_get_condition_callbacks(void);
