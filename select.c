@@ -51,6 +51,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
+#include <fcntl.h>
 
 #include "event-internal.h"
 #include "evsignal-internal.h"
@@ -178,12 +179,22 @@ select_dispatch(struct event_base *base, struct timeval *tv)
 	check_selectop(sop);
 
 	if (res == -1) {
-		if (errno != EINTR) {
-			event_warn("select");
-			return (-1);
+		if (errno == EINTR) {
+			return (0);
 		}
-
-		return (0);
+		/* select() will stuck on EBADF, so those descriptors should be removed */
+		event_warn("select");
+		for (j = 0; j < nfds; ++j) {
+			if (FD_ISSET(j, sop->event_readset_in) || FD_ISSET(j, sop->event_writeset_in)) {
+				res = fcntl(j, F_GETFL);
+				if (res == -1) {
+					event_warn("bad file descriptor %d/%d\n", j, nfds);
+					FD_CLR(j, sop->event_readset_in);
+					FD_CLR(j, sop->event_writeset_in);
+				}
+			}
+		}
+		return (-1);
 	}
 
 	event_debug(("%s: select reports %d", __func__, res));
