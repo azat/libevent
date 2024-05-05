@@ -896,8 +896,14 @@ test_bufferevent_connect_fail_eventcb(void *arg)
 	event_add(&close_listener_event, &close_timeout);
 
 	event_base_dispatch(data->base);
-	tt_int_op(n_events_invoked, ==, 1);
-	tt_int_op(n_reads_invoked, ==, 0);
+	/* NOTE: on FreeBSD it could be triggered multiple times:
+	 * - BEV_EVENT_ERROR
+	 * - BEV_EVENT_EOF|BEV_EVENT_READING (this is extra for FreeBSD, and one
+	 *   read event also will be triggered for this case)
+	 * FIXME: shouldn't we ignore it on a bufferevent layer?
+	 */
+	tt_assert(n_events_invoked == 1 || n_events_invoked == 2);
+	tt_assert(n_reads_invoked == 0 || n_reads_invoked == 1);
 
 end:
 	if (lev)
