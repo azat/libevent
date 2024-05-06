@@ -385,8 +385,8 @@ bufferevent_socket_connect(struct bufferevent *bev,
 	struct bufferevent_private *bufev_p = BEV_UPCAST(bev);
 
 	evutil_socket_t fd;
-	int connect_status = 0;
-	int result = -1;
+	int r = 0;
+	int result=-1;
 	int ownfd = 0;
 
 	bufferevent_incref_and_lock_(bev);
@@ -405,57 +405,46 @@ bufferevent_socket_connect(struct bufferevent *bev,
 #ifdef _WIN32
 		if (bufferevent_async_can_connect_(bev)) {
 			bufferevent_setfd(bev, fd);
-			connect_status = bufferevent_async_connect_(bev, fd, sa, socklen);
-		} else {
+			r = bufferevent_async_connect_(bev, fd, sa, socklen);
+			if (r < 0)
+				goto freesock;
+			bufev_p->connecting = 1;
+			result = 0;
+			goto done;
+		} else
 #endif
-			connect_status = evutil_socket_connect_(&fd, sa, socklen);
-#ifdef _WIN32
-		}
-#endif
+		r = evutil_socket_connect_(&fd, sa, socklen);
+		if (r < 0)
+			goto freesock;
 	}
 #ifdef _WIN32
-	if (connect_status >= 0)
-	{
-		/* ConnectEx() isn't always around, even when IOCP is enabled.
-		 * Here, we borrow the socket object's write handler to fall back
-		 * on a non-blocking connect() when ConnectEx() is unavailable. */
-		if (BEV_IS_ASYNC(bev)) {
-			event_assign(&bev->ev_write, bev->ev_base, fd,
-				EV_WRITE|EV_PERSIST|EV_FINALIZE, bufferevent_writecb, bev);
-		}
+	/* ConnectEx() isn't always around, even when IOCP is enabled.
+	 * Here, we borrow the socket object's write handler to fall back
+	 * on a non-blocking connect() when ConnectEx() is unavailable. */
+	if (BEV_IS_ASYNC(bev)) {
+		event_assign(&bev->ev_write, bev->ev_base, fd,
+		    EV_WRITE|EV_PERSIST|EV_FINALIZE, bufferevent_writecb, bev);
 	}
 #endif
 	bufferevent_setfd(bev, fd);
-	switch (connect_status) {
-		/* Connection in progress */
-		case 0:
-			if (!be_socket_enable(bev, EV_WRITE)) {
-				bufev_p->connecting = 1;
-				result = 0;
-			}
-			break;
-		/* The connect succeeded already. How very BSD of it. */
-		case 1:
+	if (r == 0) {
+		if (! be_socket_enable(bev, EV_WRITE)) {
+			bufev_p->connecting = 1;
 			result = 0;
-			bufev_p->connecting = 1;
-			bufferevent_trigger_nolock_(bev, EV_WRITE, BEV_OPT_DEFER_CALLBACKS);
-			break;
-		/* connect already returns an error (BSDism) */
-		case -1:
-		case 2: /* ECONNREFUSED */
-			if (ownfd)
-				evutil_closesocket(fd);
-
-			result = -1;
-			/* connecting=1 and connection_refused=1 to call the errocb from writecb */
-			bufev_p->connecting = 1;
-			bufev_p->connection_refused = 1;
-			/* NOTE: historically we calls writecb in case of ECONNREFUSED */
-			if (connect_status == 2)
-				bufferevent_trigger_nolock_(bev, EV_WRITE, BEV_OPT_DEFER_CALLBACKS);
-			break;
+			goto done;
+		}
+	} else {
+		/* The connect succeeded already. How very BSD of it. */
+		result = 0;
+		bufev_p->connecting = 1;
+		bufferevent_trigger_nolock_(bev, EV_WRITE, BEV_OPT_DEFER_CALLBACKS);
 	}
 
+	goto done;
+
+freesock:
+	if (ownfd)
+		evutil_closesocket(fd);
 done:
 	bufferevent_decref_and_unlock_(bev);
 	return result;
