@@ -1859,6 +1859,41 @@ end:
 	;
 }
 
+static void
+test_loop_hang_bad_fd_cb(evutil_socket_t fd, short events, void *arg)
+{
+	static int i;
+	if (i == 0)
+		close(fd);
+	if (i == 10)
+		event_base_loopbreak(event_get_base(arg));
+	++i;
+}
+static void
+test_loop_hang_bad_fd(void *ptr)
+{
+	struct basic_test_data *data = ptr;
+	struct event_base *base = data->base;
+	evutil_socket_t *pair = data->pair;
+	struct event *ev = NULL;
+
+	ev = event_new(base, pair[0], EV_TIMEOUT|EV_READ|EV_PERSIST, test_loop_hang_bad_fd_cb, event_self_cbarg());
+	tt_assert(ev);
+
+	{
+		struct timeval tv = { 0, 50 };
+		event_add(ev, &tv);
+	}
+
+	event_base_assert_ok_(data->base);
+	tt_assert(event_base_dispatch(base) == 0);
+	event_base_assert_ok_(data->base);
+
+end:
+	if (ev)
+		event_free(ev);
+}
+
 static int reentrant_cb_run = 0;
 
 static void
@@ -3624,6 +3659,8 @@ struct testcase_t main_testcases[] = {
 	BASIC(event_base_get_num_events, TT_FORK|TT_NEED_BASE),
 	BASIC(event_base_get_max_events, TT_FORK|TT_NEED_BASE),
 	BASIC(evmap_invalid_slots, TT_FORK|TT_NEED_BASE),
+
+	BASIC(loop_hang_bad_fd, TT_FORK|TT_NEED_BASE|TT_NEED_SOCKETPAIR),
 
 	BASIC(bad_assign, TT_FORK|TT_NEED_BASE|TT_NO_LOGS),
 	BASIC(bad_reentrant, TT_FORK|TT_NEED_BASE|TT_NO_LOGS),
