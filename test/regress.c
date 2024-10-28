@@ -1040,6 +1040,18 @@ signal_cb(evutil_socket_t fd, short event, void *arg)
 {
 	struct event *ev = arg;
 
+	/* Apparently there is a bug in OSX that leads to subsequent ALRM signal
+	 * delievered even though it_interval is set to 0, so let's disable it
+	 * explicitly to avoid test flakiness */
+#ifdef __APPLE__
+	if (fd == SIGALRM)
+	{
+		struct itimerval itv;
+		memset(&itv, 0, sizeof(itv));
+		setitimer(ITIMER_REAL, &itv, NULL);
+	}
+#endif
+
 	evsignal_del(ev);
 	test_ok = 1;
 }
@@ -3741,17 +3753,11 @@ struct testcase_t evtag_testcases[] = {
 	END_OF_TESTCASES
 };
 
-#if defined(__APPLE__)
-#define RETRY_ON_DARWIN TT_RETRIABLE
-#else
-#define RETRY_ON_DARWIN 0
-#endif
-
 struct testcase_t signal_testcases[] = {
 #ifndef _WIN32
-	LEGACY(simple_signal, TT_ISOLATED|RETRY_ON_DARWIN),
-	LEGACY(simple_signal_re_order, TT_ISOLATED|RETRY_ON_DARWIN),
-	LEGACY(multiplesignal, TT_ISOLATED|RETRY_ON_DARWIN),
+	LEGACY(simple_signal, TT_ISOLATED),
+	LEGACY(simple_signal_re_order, TT_ISOLATED),
+	LEGACY(multiplesignal, TT_ISOLATED),
 	LEGACY(immediatesignal, TT_ISOLATED),
 	LEGACY(signal_dealloc, TT_ISOLATED),
 	LEGACY(signal_timeout, TT_ISOLATED),
@@ -3760,7 +3766,7 @@ struct testcase_t signal_testcases[] = {
 	LEGACY(signal_restore, TT_ISOLATED),
 	LEGACY(signal_assert, TT_ISOLATED),
 	LEGACY(signal_while_processing, TT_ISOLATED),
-	BASIC(signal_free_in_callback, TT_FORK|TT_NEED_BASE|RETRY_ON_DARWIN),
+	BASIC(signal_free_in_callback, TT_FORK|TT_NEED_BASE),
 #endif
 	END_OF_TESTCASES
 };
